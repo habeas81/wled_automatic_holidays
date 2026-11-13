@@ -16,6 +16,7 @@ Windows steps (Task Scheduler, `.bat` files) use standard behavior but please co
 | `wled_schedule.ini` | **Your settings. You must fill in 3 things (below).** |
 | `presets.json` | **Default set.** 96 presets + playlists, *segment-agnostic*: no LED counts or segment positions, so the looks follow whatever segments you already have |
 | `presets_sparkle.json` | **Optional alternative** with the 3-LED white sparkle overlay on the twinkle looks. Needs one continuous strip; built for 1196 LEDs |
+| `PASTE_IN.md` | No-script option: each look as a one-line JSON you paste into a WLED preset, one at a time (nothing is overwritten) |
 | `adjust_led_count.py` | Rescales `presets_sparkle.json` to your LED count (not needed for the default set) |
 | `palette0.json` ... `palette9.json`, `PALETTES.txt` | The 10 custom colour palettes the presets use |
 | `start_lights.bat`, `stop_lights.bat` | Windows start / stop shortcuts |
