@@ -429,7 +429,9 @@ def wled(path, payload=None):
 
 
 def apply(name, dry=False):
-    payload = {"on": False} if name is None else {"ps": PRESET[name]}
+    # "on": True matters: playlist presets do not carry an "on" flag, and WLED ignores a re-applied preset
+    # that is already the active one, so a bare {"ps": N} could leave the lights OFF after a morning shut-off.
+    payload = {"on": False} if name is None else {"on": True, "ps": PRESET[name]}
     log.info("Applying %s %s%s", name or "OFF", payload, " (dry run)" if dry else "")
     if not dry:
         wled("/json/state", payload)
