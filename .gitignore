@@ -1,3 +1,4 @@
 __pycache__/
 *.log
 stop.flag
+wled_backup_*/

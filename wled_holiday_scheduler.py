@@ -24,6 +24,7 @@ Usage
   python wled_holiday_scheduler.py --once --dry-run                apply-once preview
   python wled_holiday_scheduler.py --reload   re-read wled_schedule.ini right now (no restart needed)
   python wled_holiday_scheduler.py --check    validate wled_schedule.ini and exit
+  python wled_holiday_scheduler.py --setup    FIRST RUN: fill in the .ini, back up your controller, add these presets to free slots
   python wled_holiday_scheduler.py --write-config   create a fresh wled_schedule.ini (never overwrites)
 
 Configuration
@@ -1104,6 +1105,259 @@ def setup_logging():
         log.addHandler(h)
 
 
+# ============================================================ --setup (first-run helper)
+def _ini_set(path, section, key, value):
+    """Set `key = value` inside [section] of the .ini, keeping comments and layout. True if changed/found."""
+    with open(path, encoding="utf-8-sig") as fh:
+        lines = fh.read().split("\n")
+    cur, found = None, False
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("[") and s.endswith("]"):
+            cur = s[1:-1].strip().lower()
+            continue
+        if cur == section and s and s[0] not in ";#" and "=" in s and s.split("=", 1)[0].strip().lower() == key:
+            m = re.search(r"\s+[;#].*$", ln)
+            cr = "\r" if ln.endswith("\r") else ""
+            lines[i] = f"{key} = {value}" + (("  " + m.group(0).strip()) if m else "") + cr
+            found = True
+            break
+    if found:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(lines))
+    return found
+
+
+def _http(method, path, data=None, ctype=None, timeout=20):
+    hdr = {"Content-Type": ctype} if ctype else {}
+    req = urllib.request.Request(f"http://{WLED_HOST}{path}", data=data, method=method, headers=hdr)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as ex:
+        return ex.code, b""
+
+
+def _upload(name, raw):
+    b = "----wledsetup7d1c"
+    body = (f'--{b}\r\nContent-Disposition: form-data; name="data"; filename="{name}"\r\n'
+            f"Content-Type: application/json\r\n\r\n").encode() + raw + f"\r\n--{b}--\r\n".encode()
+    st, _ = _http("POST", "/upload", body, f"multipart/form-data; boundary={b}", timeout=60)
+    if st != 200:
+        raise RuntimeError(f"upload of {name} failed (HTTP {st})")
+
+
+def _get_json(path):
+    st, raw = _http("GET", path)
+    if st != 200:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return None
+
+
+def _ask(prompt, yes, default=""):
+    if yes or not sys.stdin.isatty():
+        return default
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return default
+
+
+def setup_command(args):
+    """First-run helper: fill in the .ini, back up the controller, merge these presets and palettes into
+    free slots (never overwriting existing ones), and write the resulting slot numbers into the .ini."""
+    global WLED_HOST
+    yes, dry = args.yes, args.dry_run
+    interactive = sys.stdin.isatty() and not yes
+    pfile = args.presets or os.path.join(BASE_DIR, "presets.json")
+    if not os.path.exists(CONFIG_FILE):
+        if dry:
+            print(f"(dry run: {os.path.basename(CONFIG_FILE)} does not exist yet and would be created)")
+        else:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
+                fh.write(default_config_text())
+            print(f"Created {CONFIG_FILE}")
+    try:
+        ours = json.load(open(pfile, encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        sys.exit(f"Cannot read {pfile}: {ex}")
+    # ---- 1. settings
+    try:
+        c = parse_config(CONFIG_FILE) if os.path.exists(CONFIG_FILE) else {"WLED_HOST": "", "LAT": None, "LON": None}
+    except Exception as ex:
+        sys.exit(f"Fix {os.path.basename(CONFIG_FILE)} first: {ex}")
+    host = args.host or c["WLED_HOST"]
+    if not host:
+        host = _ask("IP address or hostname of your WLED controller (e.g. 192.168.1.50): ", yes)
+    if not host:
+        sys.exit("A controller address is required: use --host 192.168.1.50 or fill in [controller] host in the .ini.")
+    host = host.replace("http://", "").strip("/ ")
+    WLED_HOST = host
+    if c["LAT"] is None or c["LON"] is None:
+        txt = _ask("Your latitude, longitude (e.g. 41.88, -87.63; west/south are negative; Enter to skip): ", yes)
+        try:
+            la, lo = [float(x) for x in txt.replace(",", " ").split()]
+            if not (-90 <= la <= 90 and -180 <= lo <= 180):
+                raise ValueError
+        except ValueError:
+            la = lo = None
+            if txt:
+                print("  Could not read that; skipping. Fill in [location] in the .ini yourself.")
+    else:
+        la, lo = c["LAT"], c["LON"]
+    # ---- 2. controller
+    info = _get_json("/json/info")
+    if not info:
+        sys.exit(f"Cannot reach a WLED controller at http://{host}/ - check the address and that you are on the same network.")
+    fs = info.get("fs", {})
+    print(f"Connected to {info.get('name', 'WLED')} (WLED {info.get('ver', '?')}), {info.get('leds', {}).get('count', '?')} LEDs.")
+    st, raw = _http("GET", "/presets.json")
+    existing = {}
+    if st == 200 and raw.strip():
+        try:
+            existing = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            sys.exit("The controller's presets.json could not be read; not changing anything.")
+    used = {int(k) for k, v in existing.items() if k.isdigit() and int(k) > 0 and v}
+    exist_pal = {n: _get_json(f"/palette{n}.json") for n in range(10)}
+    exist_pal = {n: v for n, v in exist_pal.items() if isinstance(v, dict) and "palette" in v}
+    mapfile = os.path.join(BASE_DIR, "wled_setup_map.json")
+    try:
+        prev = json.load(open(mapfile, encoding="utf-8"))
+    except (OSError, ValueError):
+        prev = {}
+    # ---- 3. palettes
+    our_pal = {}
+    for n in range(10):
+        p = os.path.join(BASE_DIR, f"palette{n}.json")
+        if os.path.exists(p):
+            our_pal[n] = json.load(open(p, encoding="utf-8"))
+    palmap, pal_notes, taken = {}, [], set(exist_pal)
+    for n, body in our_pal.items():
+        old = prev.get("palettes", {}).get(str(n))
+        if n in exist_pal and exist_pal[n] == body:
+            palmap[n] = n
+        elif old is not None and old in exist_pal and exist_pal[old] == body:
+            palmap[n] = old
+        elif n not in exist_pal:
+            palmap[n] = n
+            taken.add(n)
+    for n in our_pal:
+        if n in palmap:
+            continue
+        free = next((k for k in range(10) if k not in taken), None)
+        if free is None:
+            palmap[n] = None
+            pal_notes.append(f"palette {n}: all 10 custom palette slots are in use; looks using it fall back to the built-in 'Colors Only' palette")
+        else:
+            palmap[n] = free
+            taken.add(free)
+            pal_notes.append(f"palette {n} -> your free palette slot {free}")
+
+    def remap_pal(p):
+        if isinstance(p, int) and 191 <= p <= 200 and (200 - p) in palmap:
+            t = palmap[200 - p]
+            return 5 if t is None else 200 - t
+        return p
+    # ---- 4. preset slots
+    our_slots = sorted(int(k) for k in ours if k.isdigit() and int(k) > 0 and ours[k])
+    assigned = {}
+    for s in our_slots:                                      # re-run of an earlier setup: update our own presets in place
+        t = prev.get("presets", {}).get(str(s))
+        if t and str(t) in existing and existing[str(t)].get("n") == ours[str(s)].get("n"):
+            assigned[s] = t
+    reserved = set(assigned.values())
+    for s in our_slots:
+        if s not in assigned and s not in used and s not in reserved:
+            assigned[s] = s
+            reserved.add(s)
+    for s in our_slots:
+        if s not in assigned:
+            t = next((k for k in range(1, 251) if k not in used and k not in reserved), None)
+            if t is None:
+                sys.exit("Your controller has no free preset slots left (WLED allows 250); nothing changed.")
+            assigned[s] = t
+            reserved.add(t)
+    merged = dict(existing)
+    for s in our_slots:
+        p = json.loads(json.dumps(ours[str(s)]))
+        for sg in p.get("seg", []):
+            if "pal" in sg:
+                sg["pal"] = remap_pal(sg["pal"])
+        if "playlist" in p:
+            p["playlist"]["ps"] = [assigned[x] for x in p["playlist"]["ps"]]
+        merged[str(assigned[s])] = p
+    out = json.dumps(merged, separators=(",", ":")).encode("utf-8")
+    moved = {s: t for s, t in assigned.items() if s != t}
+    inplace = sum(1 for s, t in assigned.items() if str(t) in existing)
+    # ---- 5. plan
+    print("\nPlan:")
+    print(f"  {len(our_slots)} presets/playlists to add" + (f" ({inplace} of them already installed by an earlier setup and updated in place)" if inplace else "")
+          + f"; your {len(used) - inplace} other presets are not touched.")
+    if moved:
+        sample = ", ".join(f"{s}->{t}" for s, t in list(moved.items())[:12]) + (" ..." if len(moved) > 12 else "")
+        print(f"  {len(moved)} moved to free slots because yours are taken: {sample}")
+    else:
+        print("  every preset keeps its original slot number.")
+    for n in pal_notes:
+        print("  " + n)
+    pal_up = [n for n, t in palmap.items() if t is not None and exist_pal.get(t) != our_pal[n]]
+    print(f"  {len(pal_up)} palette file(s) to upload; the new presets.json will be {len(out) // 1024 + 1} KB.")
+    room = (fs.get("t", 0) - fs.get("u", 0)) * 1024
+    if fs and len(out) + 4096 > room + len(json.dumps(existing).encode()):
+        print("  WARNING: the controller may not have enough free flash for this; see the Info page.")
+    if palmap and not any(palmap.values()) and our_pal:
+        print("  WARNING: none of the custom palettes could be installed.")
+    print(f"  .ini: host = {host}" + (f", latitude/longitude = {la}, {lo}" if la is not None else "") + ", and the [presets] slot numbers.")
+    if dry:
+        print("\nDry run: nothing was changed.")
+        return
+    if not interactive and not yes:
+        print("\nNot a terminal; re-run with --yes to apply.")
+        return
+    if interactive and _ask("\nBack up and apply this? [y/N] ", yes).lower() not in ("y", "yes"):
+        print("Cancelled; nothing was changed.")
+        return
+    # ---- 6. backup, apply
+    bdir = os.path.join(BASE_DIR, "wled_backup_" + dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    os.makedirs(bdir)
+    with open(os.path.join(bdir, "presets.json"), "wb") as fh:
+        fh.write(raw if st == 200 else b"{}")
+    for n, body in exist_pal.items():
+        with open(os.path.join(bdir, f"palette{n}.json"), "w", encoding="utf-8") as fh:
+            json.dump(body, fh)
+    print(f"\nBacked up your controller to {bdir}")
+    for n in pal_up:
+        _upload(f"palette{palmap[n]}.json", json.dumps(our_pal[n], separators=(",", ":")).encode())
+    _upload("presets.json", out)
+    time.sleep(1)
+    check = _get_json("/presets.json") or {}
+    missing = [t for t in assigned.values() if str(t) not in check]
+    if missing:
+        print(f"WARNING: {len(missing)} presets did not show up on the controller; your backup is in {bdir}")
+    else:
+        print(f"Uploaded {len(our_slots)} presets and {len(pal_up)} palettes; verified on the controller.")
+    # ---- 7. .ini
+    _ini_set(CONFIG_FILE, "controller", "host", host)
+    if la is not None:
+        _ini_set(CONFIG_FILE, "location", "latitude", la)
+        _ini_set(CONFIG_FILE, "location", "longitude", lo)
+    for name, slot in PRESET.items():
+        if slot in assigned:
+            _ini_set(CONFIG_FILE, "presets", name.lower(), assigned[slot])
+    with open(mapfile, "w", encoding="utf-8") as fh:
+        json.dump({"presets": {str(s): t for s, t in assigned.items()},
+                   "palettes": {str(n): t for n, t in palmap.items()}}, fh, indent=1)
+    print(f"Updated {os.path.basename(CONFIG_FILE)}.")
+    print("Reload the WLED page in your browser to see the new presets.")
+    if la is None:
+        print("Still to do: fill in [location] latitude and longitude in the .ini.")
+    print("Next: py wled_holiday_scheduler.py --check, then --status.")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--stop", action="store_true", help="stop the running scheduler cleanly (no auto-restart)")
@@ -1115,6 +1369,10 @@ if __name__ == "__main__":
     ap.add_argument("--check", action="store_true", help="validate wled_schedule.ini and exit")
     ap.add_argument("--write-config", action="store_true", help="create a default wled_schedule.ini (never overwrites)")
     ap.add_argument("--status", action="store_true", help="print tonight's plan and exit")
+    ap.add_argument("--setup", action="store_true", help="first-run helper: fill in the .ini, back up the controller, add the presets to free slots")
+    ap.add_argument("--host", help="controller address for --setup")
+    ap.add_argument("--presets", help="presets file for --setup (default presets.json next to the script)")
+    ap.add_argument("--yes", action="store_true", help="--setup: apply without asking")
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
     setup_logging()
@@ -1127,6 +1385,8 @@ if __name__ == "__main__":
             stop_command()
         elif a.reload:
             reload_command()
+        elif a.setup:
+            setup_command(a)
         elif a.check:
             check_command()
         elif a.write_config:

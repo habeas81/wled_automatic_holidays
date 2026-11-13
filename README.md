@@ -20,6 +20,34 @@ Windows steps (Task Scheduler, `.bat` files) use standard behavior but please co
 | `palette0.json` ... `palette9.json`, `PALETTES.txt` | The 10 custom colour palettes the presets use |
 | `start_lights.bat`, `stop_lights.bat` | Windows start / stop shortcuts |
 
+## Quick start (recommended): `--setup`
+Put this whole folder somewhere permanent, open a terminal in it, and run:
+
+    py -3 wled_holiday_scheduler.py --setup --dry-run     (shows the plan, changes nothing)
+    py -3 wled_holiday_scheduler.py --setup               (asks for your controller address, then does it)
+
+`--setup` will:
+1. ask for your controller's address (and your latitude/longitude) and write them into `wled_schedule.ini`;
+2. **back up your controller** (all presets and palettes) into a dated `wled_backup_...` folder next to the script;
+3. read the preset slots you already use and add these presets and playlists **only into free slots** - none of your
+   existing presets are changed. If one of ours would land on a slot you use, it is moved to a free one and the
+   playlists that refer to it are renumbered;
+4. upload the new `presets.json` and the palettes, and check they arrived;
+5. write the final slot numbers into the `[presets]` section of the `.ini`, so the scheduler picks the right presets.
+
+Things to know:
+* WLED has only 10 custom palette slots. If you already use some, those palettes of ours are not installed and the looks
+  that used them fall back to the built-in "Colors Only" palette (the setup tells you which). Your palettes are never overwritten.
+* Keep `wled_setup_map.json` (written by setup). It lets you run `--setup` again later to update the presets in place instead of duplicating them.
+* Setup merges `presets.json` (the segment-agnostic default). To install the optional sparkle set instead, run
+  `py -3 wled_holiday_scheduler.py --setup --presets presets_sparkle.json` (use `adjust_led_count.py` first if your strip is not 1196 LEDs).
+* `--setup` was tested against a simulated controller with deliberately colliding presets and palettes. It has not yet
+  been run against many real setups, so please read the plan before saying yes. If anything looks off, your backup folder has everything needed to restore (Config > Security & Updates).
+
+After setup run `--check` and `--status` (Step 3), then Step 4 to run it all the time. The manual route below does the same thing by hand.
+
+## Manual route (if you prefer to do it yourself)
+
 ## Step 1 - Fill in the .ini (required)
 Open `wled_schedule.ini` in any text editor. Three values are blank on purpose:
 
