@@ -14,8 +14,9 @@ Windows steps (Task Scheduler, `.bat` files) use standard behavior but please co
 |---|---|
 | `wled_holiday_scheduler.py` | The scheduler (do not need to edit it) |
 | `wled_schedule.ini` | **Your settings. You must fill in 3 things (below).** |
-| `presets.json` | 96 presets + playlists, built for a **1196-LED** strip |
-| `adjust_led_count.py` | Rescales `presets.json` to your own LED count |
+| `presets.json` | **Default set.** 96 presets + playlists, *segment-agnostic*: no LED counts or segment positions, so the looks follow whatever segments you already have |
+| `presets_sparkle.json` | **Optional alternative** with the 3-LED white sparkle overlay on the twinkle looks. Needs one continuous strip; built for 1196 LEDs |
+| `adjust_led_count.py` | Rescales `presets_sparkle.json` to your LED count (not needed for the default set) |
 | `palette0.json` ... `palette9.json`, `PALETTES.txt` | The 10 custom colour palettes the presets use |
 | `start_lights.bat`, `stop_lights.bat` | Windows start / stop shortcuts |
 
@@ -44,11 +45,16 @@ and `[seasons]` (Thanksgiving, Christmas and so on). The windows are in US terms
 Presidents Day...); edit the dates or windows if you want different holidays.
 
 ## Step 2 - Put the lights on your controller
-1. **Check your LED count and layout.** Open WLED -> Config -> LED Preferences and note your total LED count.
-   The supplied presets assume 1196 LEDs on one output. If yours is different, run
-   `py adjust_led_count.py 600` (use your count) in this folder; it writes `presets_600.json`. Use that file in
-   step 4 instead of `presets.json`. Your **ESP/controller must have enough free flash**: 96 presets is about 27 KB
-   (Info page shows filesystem usage).
+1. **Pick a preset file.**
+   * `presets.json` (default, recommended): the looks carry no `start`/`stop`, so they apply to your existing
+     segment 0 whatever its length. Works on any strip length and layout; the twinkle looks are plain (no sparkle
+     overlay). If you use several segments, only segment 0 is driven by a preset.
+   * `presets_sparkle.json` (optional): adds three overlapping white-sparkle segments on the twinkle looks and on
+     Christmas. It assumes **one continuous strip of 1196 LEDs**. For another length run
+     `py adjust_led_count.py 600` (your count), which writes `presets_sparkle_600.json`, and restore that. Your
+     WLED build must support at least 4 segments.
+   Either way, the controller needs free flash: the default file is about 17 KB, the sparkle set about 29 KB (WLED
+   Info page shows filesystem usage).
 2. **Back up what you have** first: WLED -> Config -> Security & Updates -> *Backup presets* (and
    *Backup configuration*). Restoring presets replaces ALL of your existing presets.
 3. **Upload the palettes.** Browse to `http://<your controller IP>/edit`, and upload `palette0.json` through
@@ -56,7 +62,7 @@ Presidents Day...); edit the dates or windows if you want different holidays.
    custom palettes you already have in those slots will be overwritten (the back-up above saves them).
    Palettes go in first, presets second.
 4. **Restore the presets:** WLED -> Config -> Security & Updates -> *Restore presets* -> choose `presets.json`
-   (or `presets_<N>.json`). Reload the WLED page. You should see the holiday playlists, and tapping one plays it.
+   (or `presets_sparkle.json` / `presets_sparkle_<N>.json`). Reload the WLED page. You should see the holiday playlists, and tapping one plays it.
 5. Preset slot numbers matter: the scheduler selects presets by number, and `[presets]` in the .ini lists them
    (e.g. Christmas = 14, Halloween = 12). If you restore your own presets later, keep these slots or edit the .ini.
 
@@ -111,4 +117,5 @@ keeps retrying.
 * *Sunset time is wrong by hours*: check the sign of your longitude and (optionally) set `timezone`.
 * *Wrong colours / a palette looks odd*: the palettes were not uploaded (Step 2.3) before restoring presets.
 * *Lights don't change*: `--once` and read the output; confirm you can open `http://<host>/` in a browser from that computer.
-* Presets that have a sparkle effect use three overlay segments, so your WLED build must support at least 4 segments.
+* Leftover overlay segments after switching sets: if you used the sparkle set and then restore the default one, apply any look from the sparkle set once (each single-segment look removes the overlays) or delete segments 1-3 in the WLED Segments tab.
+* Segment-agnostic presets keep your current segment bounds, grouping and spacing. They were tested on WLED 16.0.1; other versions are untested, so please report what you find.
