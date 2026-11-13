@@ -1,0 +1,15 @@
+Custom palettes used by the presets (uploaded to the controller as paletteN.json).
+Custom palette N is selected inside presets as palette ID 200 - N.
+
+palette0.json  ID 200  Game Day (crimson / cream; not used by default - edit or replace for your team)
+palette1.json  ID 199  Thanksgiving (autumn)
+palette2.json  ID 198  Christmas red / green / blue
+palette3.json  ID 197  Sparse white (the 3-LED sparkle)
+palette4.json  ID 196  Easter pastels
+palette5.json  ID 195  Valentine's reds and pinks
+palette6.json  ID 194  St. Patrick's greens and gold
+palette7.json  ID 193  USAF blue and white
+palette8.json  ID 192  USMC red and gold
+palette9.json  ID 191  Armed Forces multi-branch
+
+WLED allows 10 custom palettes, so all slots are used. Upload palettes BEFORE restoring presets.json.

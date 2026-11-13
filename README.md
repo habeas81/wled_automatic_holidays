@@ -1,0 +1,114 @@
+# WLED Holiday Lights Scheduler
+
+Runs a year-round holiday light schedule on a WLED controller. Every night it turns on the right holiday
+preset at sunset and off at sunrise + 1 hour. About 30 holidays are covered (Valentine's, St. Patrick's,
+Easter, Memorial Day, July 4th, Halloween, Thanksgiving, Christmas, New Year's, military birthdays and many more),
+each with a 3-look rotating playlist and 7-second cross-fades.
+
+It is one Python file with no packages to install (Python 3.8+), and everything you would want to change
+lives in a plain text file, `wled_schedule.ini`. Tested end to end on Linux against a simulated controller; the
+Windows steps (Task Scheduler, `.bat` files) use standard behavior but please confirm the reboot test.
+
+## What is in the box
+| File | What it is |
+|---|---|
+| `wled_holiday_scheduler.py` | The scheduler (do not need to edit it) |
+| `wled_schedule.ini` | **Your settings. You must fill in 3 things (below).** |
+| `presets.json` | 96 presets + playlists, built for a **1196-LED** strip |
+| `adjust_led_count.py` | Rescales `presets.json` to your own LED count |
+| `palette0.json` ... `palette9.json`, `PALETTES.txt` | The 10 custom colour palettes the presets use |
+| `start_lights.bat`, `stop_lights.bat` | Windows start / stop shortcuts |
+
+## Step 1 - Fill in the .ini (required)
+Open `wled_schedule.ini` in any text editor. Three values are blank on purpose:
+
+| Section / key | What to put | Example |
+|---|---|---|
+| `[controller]` `host` | Your WLED controller's IP address or hostname (check your router, or WLED's Info page). Give it a fixed/reserved IP. | `192.168.1.50` |
+| `[location]` `latitude` | Your latitude, decimal degrees (north +, south -) | `41.88` |
+| `[location]` `longitude` | Your longitude, decimal degrees (east +, **west -**; the US is negative) | `-87.63` |
+
+Optional: `timezone` (a name like `America/Chicago` or `Europe/London`; blank uses the computer's own timezone;
+on Windows `py -m pip install tzdata` makes named zones work, but blank is fine). Latitude/longitude only
+drive the sunset/sunrise times, so a nearby city is accurate enough. Nothing is sent anywhere except HTTP
+requests to your own controller on your own network.
+
+Until host and location are filled in, the script refuses to run and tells you what is missing.
+
+Other settings you may want (all optional, all in the same file): `sunset_offset_min` / `sunrise_offset_min`
+(when to turn on/off relative to sunset/sunrise), the length of each holiday's window under `[windows]`,
+`[birthdays]` (person = MM-DD, gets a 2-night look), `[custom_holidays]` (your own dates), `[events]`
+(one-off events), `[ou]` (game-day nights for your favourite team: set `enabled = yes`, add a
+`games_2027 = 09-04, 09-11, ...` line with your team's game dates, and edit preset slot 2 to your team colours),
+and `[seasons]` (Thanksgiving, Christmas and so on). The windows are in US terms (Memorial Day, Thanksgiving,
+Presidents Day...); edit the dates or windows if you want different holidays.
+
+## Step 2 - Put the lights on your controller
+1. **Check your LED count and layout.** Open WLED -> Config -> LED Preferences and note your total LED count.
+   The supplied presets assume 1196 LEDs on one output. If yours is different, run
+   `py adjust_led_count.py 600` (use your count) in this folder; it writes `presets_600.json`. Use that file in
+   step 4 instead of `presets.json`. Your **ESP/controller must have enough free flash**: 96 presets is about 27 KB
+   (Info page shows filesystem usage).
+2. **Back up what you have** first: WLED -> Config -> Security & Updates -> *Backup presets* (and
+   *Backup configuration*). Restoring presets replaces ALL of your existing presets.
+3. **Upload the palettes.** Browse to `http://<your controller IP>/edit`, and upload `palette0.json` through
+   `palette9.json` (file names must stay exactly as they are). WLED allows only 10 custom palettes, so any
+   custom palettes you already have in those slots will be overwritten (the back-up above saves them).
+   Palettes go in first, presets second.
+4. **Restore the presets:** WLED -> Config -> Security & Updates -> *Restore presets* -> choose `presets.json`
+   (or `presets_<N>.json`). Reload the WLED page. You should see the holiday playlists, and tapping one plays it.
+5. Preset slot numbers matter: the scheduler selects presets by number, and `[presets]` in the .ini lists them
+   (e.g. Christmas = 14, Halloween = 12). If you restore your own presets later, keep these slots or edit the .ini.
+
+## Step 3 - Test
+Open a terminal (Windows: Command Prompt) in this folder:
+
+    py -3 wled_holiday_scheduler.py --write-config   (only if wled_schedule.ini is missing)
+    py -3 wled_holiday_scheduler.py --check          (validates the .ini)
+    py -3 wled_holiday_scheduler.py --status         (tonight's plan and the next few nights, with sunset times)
+    py -3 wled_holiday_scheduler.py --show 2027-01-01 2027-12-31    (the whole year's schedule)
+    py -3 wled_holiday_scheduler.py --once --dry-run (what it would do right now, touching nothing)
+    py -3 wled_holiday_scheduler.py --once           (apply tonight's state to the controller once)
+
+On macOS/Linux use `python3` in place of `py -3`. If `--status` shows the right sunset time for your area and
+`--once` changes the lights, you are done with setup.
+
+## Step 4 - Run it all the time
+The scheduler must stay running on an always-on computer (a PC, mini PC or Raspberry Pi on the same network).
+It applies the right state at start-up, so a reboot or power cut heals itself, and with
+`set_power_on_default = yes` it also stores tonight's preset as the controller's own power-on default.
+
+**Windows:** put this folder somewhere permanent (e.g. `C:\wled\`; avoid external or removable drives). Open PowerShell
+**as Administrator** (use a python.org install; the Microsoft Store Python cannot run at boot). Adjust the paths:
+
+    $py = (Get-Command pythonw).Source ; $py
+    $a = New-ScheduledTaskAction -Execute $py -Argument '"C:\wled\wled_holiday_scheduler.py"' -WorkingDirectory "C:\wled"
+    $t = New-ScheduledTaskTrigger -AtStartup ; $t.Delay = 'PT1M'
+    $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName "WLED Holiday Lights" -Action $a -Trigger $t -Settings $s -User "SYSTEM" -RunLevel Highest
+    Start-ScheduledTask -TaskName "WLED Holiday Lights"
+
+Remove later with `Unregister-ScheduledTask -TaskName "WLED Holiday Lights" -Confirm:$false`.
+
+**Linux / Raspberry Pi:** run `python3 wled_holiday_scheduler.py` from a systemd service (`Restart=on-failure` is
+optional; the script supervises itself) or from `@reboot` in crontab.
+
+Stopping and starting: `stop_lights.bat` (or `--stop`) stops it cleanly and it stays stopped until you run
+`start_lights.bat` or reboot; if it merely crashes it restarts itself after 30 s. Check `wled_scheduler.log` (next to
+the script) if anything looks wrong: "WLED unreachable" just means the controller or network was down, and it
+keeps retrying.
+
+## Everyday use
+* Edit `wled_schedule.ini` and save; the running scheduler picks it up at its next wake-up, or at once with
+  `py -3 wled_holiday_scheduler.py --reload`. No restart. A mistake is logged and ignored, the last good settings stay.
+* Moving holidays (Memorial Day, Thanksgiving, Easter, ...) are calculated automatically; Super Bowl and your
+  team's nights need dates added under `[custom_holidays]` / `[ou]` each year.
+* Want to change a look? Edit the preset in WLED (keep its slot number), or change its slot in `[presets]`.
+* Wake pattern: hourly by day (clock check only), every 15 minutes from an hour before sunset until sunrise + 1 h.
+
+## Troubleshooting
+* *"Not configured yet"*: fill in the blanks from Step 1.
+* *Sunset time is wrong by hours*: check the sign of your longitude and (optionally) set `timezone`.
+* *Wrong colours / a palette looks odd*: the palettes were not uploaded (Step 2.3) before restoring presets.
+* *Lights don't change*: `--once` and read the output; confirm you can open `http://<host>/` in a browser from that computer.
+* Presets that have a sparkle effect use three overlay segments, so your WLED build must support at least 4 segments.
